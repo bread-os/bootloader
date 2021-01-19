@@ -1,0 +1,8 @@
+[Defines]
+    DEC_SPECIFICATION       = 0x00010005
+    PACKAGE_NAME            = LoaderPkg
+    PACKAGE_GUID            = 92c8e51c-a7db-4451-add1-f44d05832db2
+    PACKAGE_VERSION         = 0.1
+
+[Includes]
+  Include

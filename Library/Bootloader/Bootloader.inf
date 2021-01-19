@@ -1,0 +1,34 @@
+[Defines]
+  INF_VERSION                    = 0x00010005
+  BASE_NAME                      = Bootloader
+  FILE_GUID                      = b701a3ed-6cc7-4df1-973a-d7e590634d90
+  MODULE_TYPE                    = UEFI_APPLICATION
+  VERSION_STRING                 = 0.1
+  ENTRY_POINT                    = UefiMain
+
+[Sources]
+  Source/Loader.c
+
+[Packages]
+  LoaderPkg/LoaderPkg.dec
+  MdePkg/MdePkg.dec
+  NetworkPkg/NetworkPkg.dec
+
+[LibraryClasses]
+  UefiLib
+  UefiApplicationEntryPoint
+  DevicePathLib
+  UefiBootServicesTableLib
+  FileHandleLib
+
+[Guids]
+  gEfiFileInfoGuid
+  gEfiAcpiTableGuid
+
+[Protocols]
+  gEfiLoadedImageProtocolGuid
+  gEfiDevicePathToTextProtocolGuid
+  gEfiDevicePathFromTextProtocolGuid
+  gEfiDevicePathProtocolGuid
+  gEfiDevicePathUtilitiesProtocolGuid
+  gEfiSimpleFileSystemProtocolGuid
