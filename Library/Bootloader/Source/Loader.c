@@ -12,6 +12,119 @@
 
 CHAR16 *gKernelPath = L"kernel.efi";
 CHAR16 *gKernelEntry = L"kernel_start";
+CHAR16 *gFontPath = L"kernel-font.psf";
+
+// @todo: remove these structs
+#define PSF1_MAGIC0 0x36
+#define PSF1_MAGIC1 0x04
+typedef struct
+{
+  void *BaseAddress;
+  UINTN BufferSize;
+  unsigned int Width;
+  unsigned int Height;
+  unsigned int PixelsPerScanLine;
+} FrameBuffer;
+
+typedef struct
+{
+  unsigned char magic[2];
+  unsigned char mode;
+  unsigned char charsize;
+} PSF1_HEADER;
+
+typedef struct
+{
+  PSF1_HEADER *psf1_Header;
+  void *graphBuffer;
+} PSF1_FONT;
+
+typedef struct
+{
+  FrameBuffer *framebuffer;
+  PSF1_FONT *psf_1_font;
+  void *mMap;
+  UINTN mMapSize;
+  UINTN mMapDescriptorSize;
+  void *rsdp;
+} BootInfo;
+FrameBuffer frameBuffer;
+BootInfo bootInfo;
+
+EFI_FILE *LoadFile(IN EFI_FILE *Directory, IN CHAR16 *Path, IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
+{
+  EFI_FILE *File;
+  EFI_HANDLE_PROTOCOL HandleProtocol = SystemTable->BootServices->HandleProtocol;
+
+  EFI_LOADED_IMAGE_PROTOCOL *LoadedImage;
+  HandleProtocol(ImageHandle, &gEfiSimpleFileSystemProtocolGuid, (VOID **)&LoadedImage);
+
+  EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *FileSystem;
+  HandleProtocol(LoadedImage->DeviceHandle, &gEfiSimpleFileSystemProtocolGuid, (VOID **)&FileSystem);
+
+  EFI_FILE *Root;
+  if (Directory == NULL)
+    FileSystem->OpenVolume(FileSystem, &Root);
+  else
+    Root = Directory;
+  EFI_STATUS Status = Root->Open(Root, &File, gKernelPath, EFI_FILE_MODE_READ, EFI_FILE_READ_ONLY);
+  if (Status != EFI_SUCCESS)
+  {
+    ErrorPrint(L"Kernel file missing\r\n");
+    return NULL;
+  }
+  return File;
+}
+
+PSF1_FONT *LoadPSF1Font(IN EFI_FILE *Directory, IN CHAR16 *Path, IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
+{
+  EFI_FILE *Font = LoadFile(Directory, Path, ImageHandle, SystemTable);
+  if (Font == NULL)
+    return NULL;
+  PSF1_HEADER *FontHeader;
+  UINTN Size = sizeof(PSF1_HEADER);
+  SystemTable->BootServices->AllocatePool(EfiLoaderData, Size, (VOID **)&FontHeader);
+  Font->Read(Font, &Size, FontHeader);
+
+  if (FontHeader->magic[0] != PSF1_MAGIC0 || FontHeader->magic[1] != PSF1_MAGIC1)
+  {
+    return NULL;
+  }
+  UINTN GraphBufferSize = FontHeader->charsize * 256;
+  if (FontHeader->mode == 1)
+  {
+    GraphBufferSize = FontHeader->charsize * 512;
+  }
+  VOID *GraphBuffer;
+  {
+    Font->SetPosition(Font, Size);
+    SystemTable->BootServices->AllocatePool(EfiLoaderData, GraphBufferSize, (VOID **)&GraphBuffer);
+    Font->Read(Font, &GraphBufferSize, GraphBuffer);
+  }
+  PSF1_FONT *ResultFont;
+  SystemTable->BootServices->AllocatePool(EfiLoaderData, Size, (VOID **)&ResultFont);
+  ResultFont->psf1_Header = FontHeader;
+  ResultFont->graphBuffer = GraphBuffer;
+  return ResultFont;
+}
+
+FrameBuffer *InitGraphicsOutputProtocol(IN EFI_SYSTEM_TABLE *SystemTable)
+{
+  EFI_GRAPHICS_OUTPUT_PROTOCOL *GOP;
+  EFI_STATUS Status;
+  Status = SystemTable->BootServices->LocateProtocol(&gEfiGraphicsOutputProtocolGuid, NULL, (VOID **)&GOP);
+  if (EFI_ERROR(Status))
+  {
+    ErrorPrint(L"Cannot locate EFI_GRAPHICS_OUTPUT_PROTOCOL_GUID\r\n");
+    return NULL;
+  }
+  frameBuffer.BaseAddress = (VOID *)GOP->Mode->FrameBufferBase;
+  frameBuffer.BufferSize = GOP->Mode->FrameBufferSize;
+  frameBuffer.Width = GOP->Mode->Info->HorizontalResolution;
+  frameBuffer.Height = GOP->Mode->Info->VerticalResolution;
+  frameBuffer.PixelsPerScanLine = GOP->Mode->Info->PixelsPerScanLine;
+  return &frameBuffer;
+}
 
 /**
   as the real entry point for the application.
@@ -31,7 +144,7 @@ UefiMain(
 {
   SystemTable->ConOut->ClearScreen(SystemTable->ConOut);
 
-  EFI_FILE *Kernel;
+  EFI_FILE *Kernel = LoadFile(NULL, gKernelPath, ImageHandle, SystemTable);
   {
     EFI_HANDLE_PROTOCOL HandleProtocol = SystemTable->BootServices->HandleProtocol;
 
@@ -107,6 +220,9 @@ UefiMain(
       break;
     }
   }
+  FrameBuffer *newBuffer = InitGraphicsOutputProtocol(SystemTable);
+  PSF1_FONT *newFont = LoadPSF1Font(NULL, gFontPath, ImageHandle, SystemTable);
+
   // Get the memory map from the Firmware
   EFI_MEMORY_DESCRIPTOR *Map = NULL;
   UINTN MapSize, MapKey;
@@ -136,9 +252,16 @@ UefiMain(
     }
   }
 
+  bootInfo.framebuffer = newBuffer;
+  bootInfo.psf_1_font = newFont;
+  bootInfo.mMap = Map;
+  bootInfo.mMapSize = MapSize;
+  bootInfo.mMapDescriptorSize = DescriptorSize;
+  bootInfo.rsdp = Rsdp;
+
   // Jump to the kernel
   SystemTable->BootServices->ExitBootServices(ImageHandle, MapKey);
-  typedef void EntryPoint(EFI_MEMORY_DESCRIPTOR *, UINTN, UINTN, VOID *);
-  ((EntryPoint *)Header.e_entry)(Map, MapSize, DescriptorSize, Rsdp);
+  typedef void EntryPoint(BootInfo *);
+  ((EntryPoint *)Header.e_entry)(&bootInfo);
   return EFI_SUCCESS;
 }
